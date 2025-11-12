@@ -1,169 +1,182 @@
-const express = require('express');
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const db = require("./database.js");
+const authenticateToken = require("./middleware/auth.js");
+
 const app = express();
-const port = 3200;
+const PORT = process.env.PORT || 3200;
+const JWT_SECRET = process.env.JWT_SECRET || "rahasia_super_aman";
 
-// ini merupakan import db nya
-const {dbMovies, dbDirectors} = require('./database');
-
+// Middleware utama
+app.use(cors());
 app.use(express.json());
 
-// Data Movies
-// let movies = [
-//     { id: 1, title: 'Inception', director: 'Christopher Nolan', year: 2010 },
-//     { id: 2, title: 'The Matrix', director: 'The Wachowskis', year: 1999 },
-//     { id: 3, title: 'Interstellar', director: 'Christopher Nolan', year: 2014 }
-// ];
-
-// Data Directors
-// let directors = [
-//     { id: 1, name: 'Christopher Nolan', birthYear: 1970 },
-//     { id: 2, name: 'The Wachowskis', birthYear: 1965 },
-//     { id: 3, name: 'Quentin Tarantino', birthYear: 1963 }
-// ];
-
-// ini digunakan untuk routes movies nya
-app.get('/', (req, res) => {
-    res.send('Selamat datang di API Film!');
+// Status server
+app.get("/status", (req, res) => {
+  res.json({ ok: true, status: "Server is running", service: "Movie API" });
 });
 
-app.get('/movies', (req, res) => {
-    const sql = "SELECT * FROM movies ORDER BY id ASC";
-    dbMovies.all(sql, [], (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
-});
+// AUTH SECTION 
 
+// REGISTER
+app.post("/register", (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password || password.length < 6) {
+    return res.status(400).json({ error: "Username dan password tidak valid" });
+  }
 
-app.get('/movies', (req, res) => {
-    res.json(movies);
-});
-
-app.get('/movies/:id', (req, res) => {
-    const movie = movies.find(m => m.id === parseInt(req.params.id));
-    if (movie) {
-        res.json(movie);
-    } else {
-        res.status(404).send('Film tidak ditemukan');
+  bcrypt.hash(password, 10, (err, hashedPassword) => {
+    if (err) {
+      console.error("Error hashing password:", err);
+      return res.status(500).json({ error: "Gagal memproses pendaftaran" });
     }
-});
 
-app.get('/movies/title/:title', (req, res) => {
-    const movie = movies.find(m => m.title.toLowerCase() === req.params.title.toLowerCase());
-    if (movie) {
-        res.json(movie);
-    } else {
-        res.status(404).send('Film tidak ditemukan');
-    }
-});
-
-// ini digunakan untuk post pada movies
-app.post('/movies', (req, res) => {
-    const { title, director, year } = req.body;
-    if (!title || !director || !year) {
-        return res.status(400).json({ message: "Title, director, dan year harus diisi" });
-    }
-    const sql = "INSERT INTO movies (title, director, year) VALUES (?, ?, ?)";
-    dbMovies.run(sql, [title, director, year], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.status(201).json({ id: this.lastID, title, director, year });
-    });
-});
-
-// digunakan untuk mengupdate data pada movies
-app.put('/movies/:id', (req, res) => {
-    const { title, director, year } = req.body;
-    const sql = "UPDATE movies SET title = ?, director = ?, year = ? WHERE id = ?";
-    dbMovies.run(sql, [title, director, year, req.params.id], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        if (this.changes === 0) {
-            return res.status(404).json({ message: "Film tidak ditemukan" });
+    const sql = "INSERT INTO users (username, password) VALUES (?, ?)";
+    db.run(sql, [username.toLowerCase(), hashedPassword], function (err) {
+      if (err) {
+        if (err.message.includes("UNIQUE constraint")) {
+          return res.status(409).json({ error: "Username sudah terdaftar" });
         }
-        res.json({ id: req.params.id, title, director, year });
+        return res.status(500).json({ error: "Gagal menyimpan pengguna" });
+      }
+      res.status(201).json({
+        message: "Registrasi berhasil",
+        userId: this.lastID,
+      });
     });
+  });
 });
 
-// digunakan untuk menghapus data pada movies
-app.delete('/movies/:id', (req, res) => {
-    const sql = "DELETE FROM movies WHERE id = ?";
-    dbMovies.run(sql, [req.params.id], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        if (this.changes === 0) {
-            return res.status(404).json({ message: "Film tidak ditemukan" });
-        }
-        res.json({ message: "Film berhasil dihapus" });
+// LOGIN
+app.post("/login", (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password)
+    return res.status(400).json({ error: "Username dan password wajib diisi" });
+
+  const sql = "SELECT * FROM users WHERE username = ?";
+  db.get(sql, [username.toLowerCase()], (err, user) => {
+    if (err || !user)
+      return res.status(401).json({ error: "Username atau password salah" });
+
+    bcrypt.compare(password, user.password, (err, isMatch) => {
+      if (err || !isMatch)
+        return res.status(401).json({ error: "Username atau password salah" });
+
+      const payload = { id: user.id, username: user.username };
+      const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "1h" });
+      res.json({ message: "Login sukses", token });
     });
+  });
 });
 
-// Routes Directors
+//MOVIES SECTION
 
-// GET all directors
-app.get('/directors', (req, res) => {
-   const sql = "SELECT * FROM directors ORDER BY id ASC";
-    dbDirectors.all(sql, [], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(rows);
-    });
+// GET semua film
+app.get("/movies", (req, res) => {
+  const sql = "SELECT * FROM movies ORDER BY id ASC";
+  db.all(sql, [], (err, rows) => {
+    if (err) return res.status(400).json({ error: err.message });
+    res.json({ message: "success", data: rows });
+  });
 });
 
-// GET director by id, jadi ini digunakan untuk melihat directors berdasarkan id nya
-app.get('/directors/:id', (req, res) => {
-    const sql = "SELECT * FROM directors WHERE id = ?";
-    dbDirectors.get(sql, [req.params.id], (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (!row) {
-            return res.status(404).json({ message: "Sutradara tidak ditemukan" });
-        }
-        res.json(row);
-    });
+// GET film berdasarkan ID
+app.get("/movies/:id", (req, res) => {
+  const sql = "SELECT * FROM movies WHERE id = ?";
+  db.get(sql, [req.params.id], (err, row) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!row) return res.status(404).json({ message: "Movie not found" });
+    res.json({ message: "success", data: row });
+  });
 });
 
-// POST director
-app.post('/directors', (req, res) => {
-    const { name, birthYear } = req.body;
-    if (!name || !birthYear) {
-        return res.status(400).json({ message: "Name dan birthYear harus diisi" });
-    }
-    const sql = "INSERT INTO directors (name, birthYear) VALUES (?, ?)";
-    dbDirectors.run(sql, [name, birthYear], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.status(201).json({ id: this.lastID, name, birthYear });
-    });
+// POST tambah film (dengan autentikasi)
+app.post("/movies", authenticateToken, (req, res) => {
+  const { title, director, year } = req.body;
+  if (!title || !director || !year)
+    return res
+      .status(400)
+      .json({ message: "Judul, sutradara, dan tahun wajib diisi" });
+
+  const sql = "INSERT INTO movies (title, director, year) VALUES (?, ?, ?)";
+  db.run(sql, [title, director, year], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ message: "Movie berhasil ditambahkan", id: this.lastID });
+  });
 });
 
-// UPDATE director
-app.put('/directors/:id', (req, res) => {
-    const { name, birthYear } = req.body;
-    const sql = "UPDATE directors SET name = ?, birthYear = ? WHERE id = ?";
-    dbDirectors.run(sql, [name, birthYear, req.params.id], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        if (this.changes === 0) {
-            return res.status(404).json({ message: "Sutradara tidak ditemukan" });
-        }
-        res.json({ id: req.params.id, name, birthYear });
-    });
+//DIRECTORS SECTION 
+
+// GET semua sutradara
+app.get("/directors", (req, res) => {
+  const sql = "SELECT * FROM directors ORDER BY id ASC";
+  db.all(sql, [], (err, rows) => {
+    if (err) return res.status(400).json({ error: err.message });
+    res.json({ message: "success", data: rows });
+  });
 });
 
-// DELETE director
-app.delete('/directors/:id', (req, res) => {
-    const sql = "DELETE FROM directors WHERE id = ?";
-    dbDirectors.run(sql, [req.params.id], function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        if (this.changes === 0) {
-            return res.status(404).json({ message: "Sutradara tidak ditemukan" });
-        }
-        res.json({ message: "Sutradara berhasil dihapus" });
-    });
+// GET sutradara berdasarkan nama
+app.get("/directors/:name", (req, res) => {
+  const sql = "SELECT * FROM directors WHERE name = ?";
+  db.all(sql, [req.params.name], (err, rows) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (rows.length === 0)
+      return res.status(404).json({ message: "Director not found" });
+    res.json({ message: "success", data: rows });
+  });
 });
 
-// Default 404 Handler
-app.use((req, res) => {
-    res.status(404).json({ message: "Endpoint tidak ditemukan" });
+// POST tambah sutradara
+app.post("/directors", authenticateToken, (req, res) => {
+  const { name, country } = req.body;
+  if (!name || !country)
+    return res
+      .status(400)
+      .json({ message: "Nama dan negara sutradara wajib diisi" });
+
+  const sql = "INSERT INTO directors (name, country) VALUES (?, ?)";
+  db.run(sql, [name, country], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ message: "Director berhasil ditambahkan", id: this.lastID });
+  });
 });
 
-// Jalankan Server
-app.listen(port, () => {
-    console.log(`Server berjalan di http://localhost:${port}`);
+// PUT ubah sutradara
+app.put("/directors/:id", authenticateToken, (req, res) => {
+  const { name, country } = req.body;
+  const { id } = req.params;
+
+  if (!name || !country)
+    return res
+      .status(400)
+      .json({ message: "Nama dan negara sutradara wajib diisi" });
+
+  const sql = "UPDATE directors SET name = ?, country = ? WHERE id = ?";
+  db.run(sql, [name, country, id], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0)
+      return res.status(404).json({ message: "Director tidak ditemukan" });
+    res.json({ message: "Director berhasil diperbarui" });
+  });
+});
+
+// DELETE hapus sutradara
+app.delete("/directors/:id", authenticateToken, (req, res) => {
+  const { id } = req.params;
+  const sql = "DELETE FROM directors WHERE id = ?";
+  db.run(sql, [id], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0)
+      return res.status(404).json({ message: "Director tidak ditemukan" });
+    res.json({ message: "Director berhasil dihapus" });
+  });
+});
+
+//START SERVER
+app.listen(PORT, () => {
+  console.log(`✅ Server aktif di http://localhost:${PORT}`);
 });
