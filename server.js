@@ -178,5 +178,5 @@ app.delete("/directors/:id", authenticateToken, (req, res) => {
 
 //START SERVER
 app.listen(PORT, () => {
-  console.log(`✅ Server aktif di http://localhost:${PORT}`);
+  console.log(`Server aktif di http://localhost:${PORT}`);
 });
